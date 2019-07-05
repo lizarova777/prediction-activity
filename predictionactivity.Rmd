@@ -1,0 +1,149 @@
+---
+title: "Prediction Activity"
+author: "Anna Lizarov"
+date: "February 12, 2019"
+output: html_document
+---
+
+```{r}
+# Libraries
+library(rpart)
+library(caret)
+library(dplyr)
+library(tidyr)
+library(corrplot)
+library(ggplot2)
+```
+
+```{r}
+# Retrieving datasets
+V <- read.csv("studentVle.csv", header=TRUE)
+A <- read.csv("studentAssessment.csv", header=TRUE)
+I <- read.csv("studentInfo.csv", header=TRUE)
+```
+
+##Wrangling
+```{r}
+#a
+V1 <- V %>% select(id_student,sum_click) %>%  group_by(id_student) %>% summarise(mean_click=mean(sum_click))
+
+#b
+A1 <- A %>% select(id_student,score) %>% group_by(id_student) %>%summarise(mean_score=mean(score))
+
+#c
+I1 <- I %>% group_by(id_student)
+VA <- full_join(V1, A1, by="id_student")
+IVA <- full_join(I1, VA, by = "id_student")
+```
+
+
+##Create a validation set
+```{r}
+set.seed(123)
+trainData <- createDataPartition(
+  y = IVA$final_result, ## the outcome data are needed
+  p = .75, ## The percentage of data in the training set
+  list = FALSE)
+training <- IVA[ trainData,]
+testing <-IVA[-trainData,]
+```
+
+
+##Explore
+```{r}
+summary(training$final_result)
+```
+```{r}
+training <- filter(training, final_result != "Withdrawn")  #remove students who withdrew
+training$final_result[training$final_result == "Distinction"] <- "Pass"  #rows where final_result = distinction where renames to "pass"
+summary(training$final_result)
+```
+```{r}
+#Visualization
+training2<- training[,-(1:3)]
+training2<- training2[,-2]
+training2$final_result <- ifelse(training2$final_result == "Pass", 1, 0)
+training2$gender <- ifelse(training$gender == "M", 1, 0)
+training2$disability <- ifelse(training$disability == "Y", 1, 0)
+training2 <- training2 %>% mutate(age_band=ifelse(age_band == "0-35",1, ifelse(age_band=="35-55",2, ifelse(age_band == "55<=",3,0)))) %>% mutate(highest_education = ifelse(highest_education == "Lower Than A Level", 1, ifelse(highest_education == "A Level or Equivalent", 2, ifelse(highest_education == "HE Qualification", 3,0)))) %>% mutate(imd_band =ifelse(imd_band == "0-10%", 1, ifelse(imd_band == "10-20",2, ifelse(imd_band=="20-30%",3, ifelse(imd_band=="30-40%", 4, ifelse(imd_band =="40-50%",5, ifelse(imd_band=="50-60%", 6, ifelse(imd_band=="60-70%", 7, ifelse(imd_band == "70-80%", 8, ifelse(imd_band=="80-90%", 9, 10)))) ))))))
+                                                                                                          training3 <- training2 %>% gather("Variables", "Value",1:10 )
+
+ggplot(training3, aes(Value))+
+  geom_histogram()+
+  facet_wrap(~Variables, scale="free")
+```
+
+```{r}
+# Scatterplot including the outcome variable
+pairs(training2)
+```
+
+
+```{r}
+#Scatterplot excluding the outcome variable
+training4 <- select(training2, -final_result)
+pairs(training4)
+```
+
+```{r}
+#Scatterplot excluding the outcome variable and the categorical variable
+training5 <- select(training4,num_of_prev_attempts, studied_credits,mean_click, mean_score )
+pairs(training5)
+```
+
+##Model Training
+```{r}
+#CART
+training2[is.na(training2)] <- 0
+names(training2) <- gsub("_", "", names(training2))
+training2$finalresult <- as.factor(training2$finalresult)
+training2$finalresult <- ifelse(training2$finalresult == "1", "Pass", "Fail")
+training2$finalresult <- as.factor(training2$finalresult)
+#Define the control elements we would like to use
+ctrl <- trainControl(method = "repeatedcv", #Tell caret to perform 10-fold cross validation
+                repeats = 3, #Tell caret to repeat each fold three times
+                classProbs = TRUE, #Calculate class probabilities for ROC calculation
+                summaryFunction = twoClassSummary)
+
+#Define the model
+cartFit <- train(finalresult ~ ., #Define which variable to predict 
+                data = training2, #Define the data set to train the model on
+                trControl = ctrl, #Tell caret the control elements (EG - the cross validation)
+                method = "rpart", #Define the model type
+                metric = "ROC", #Tell caret to calculate the ROC curve
+                preProc = c("center", "scale")) 
+
+#Check the results
+cartFit
+                
+#Plot ROC against complexity 
+plot(cartFit) 
+
+```
+
+
+##Model Testing
+```{r}
+testing2 <- testing[,-(1:3)]
+testing2 <- testing2[,-2]
+testing2<- na.omit(testing2)
+names(testing2) <- gsub("_", "", names(testing2))
+testing2$finalresult[testing2$finalresult == "Distinction"] = "Pass"
+testing2$finalresult <- ifelse(testing2$finalresult == "Pass",1,0)
+testing2$finalresult <- as.factor(testing2$finalresult )
+testing2$finalresult <- ifelse(testing2$finalresult == "1", "Pass", "Fail")
+testing2$finalresult <- as.factor(testing2$finalresult)
+testing2$gender <- ifelse(testing2$gender == "M", 1, 0)
+testing2$disability <- ifelse(testing2$disability == "Y", 1, 0)
+testing2 <- testing2 %>% mutate(ageband=ifelse(ageband == "0-35",1, ifelse(ageband=="35-55",2, ifelse(ageband == "55<=",3,0)))) %>% mutate(highesteducation = ifelse(highesteducation == "Lower Than A Level", 1, ifelse(highesteducation == "A Level or Equivalent", 2, ifelse(highesteducation == "HE Qualification", 3,0)))) %>% mutate(imdband =ifelse(imdband == "0-10%", 1, ifelse(imdband == "10-20",2, ifelse(imdband=="20-30%",3, ifelse(imdband=="30-40%", 4, ifelse(imdband =="40-50%",5, ifelse(imdband=="50-60%", 6, ifelse(imdband=="60-70%", 7, ifelse(imdband == "70-80%", 8, ifelse(imdband=="80-90%", 9, 10)))) ))))))
+#Generate prediction using previously trained model
+cartClasses <- predict(cartFit, newdata = testing2)
+cartClasses <- as.factor(cartClasses)
+
+#Generate model statistics
+
+confusionMatrix(data = cartClasses, testing2$finalresult)
+
+summary(testing2$finalresult)
+```
+
